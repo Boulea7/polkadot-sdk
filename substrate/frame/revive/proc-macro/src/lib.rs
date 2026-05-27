@@ -479,7 +479,7 @@ fn expand_functions(def: &EnvDef) -> TokenStream2 {
 
 		// This is the overhead to call an empty syscall that always needs to be charged.
 		self.charge_gas(
-			crate::vm::BackendCosts::<<M as MeterBackend<E::T>>::Backend>::host_fn()
+			crate::vm::BackendCosts::<<M as MeterBackend<E::T>>::Backend>::HostFn
 		).map_err(TrapReason::from)?;
 
 		// They will be mapped to variable names by the syscall specific code.

@@ -105,31 +105,21 @@ impl<T: Config> WeightBackend<T> for EvmBackend {
 /// type is in scope. Add a new variant when another host-call cost is found
 /// to diverge between backends.
 #[cfg_attr(test, derive(DebugNoBound, PartialEqNoBound, EqNoBound))]
-pub struct BackendCosts<B>(BackendCostKind, PhantomData<fn(B)>);
-
-#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-enum BackendCostKind {
+pub enum BackendCosts<B> {
 	/// Base cost of `seal_call`.
 	CallBase,
 	/// Per-ecall dispatch overhead.
 	HostFn,
-}
-
-impl<B> BackendCosts<B> {
-	pub const fn call_base() -> Self {
-		Self(BackendCostKind::CallBase, PhantomData)
-	}
-
-	pub const fn host_fn() -> Self {
-		Self(BackendCostKind::HostFn, PhantomData)
-	}
+	#[doc(hidden)]
+	_Phantom(PhantomData<B>),
 }
 
 impl<T: Config, B: WeightBackend<T> + 'static> Token<T> for BackendCosts<B> {
 	fn weight(&self) -> Weight {
-		match self.0 {
-			BackendCostKind::CallBase => B::call_base_weight(),
-			BackendCostKind::HostFn => B::host_fn_weight(),
+		match self {
+			Self::CallBase => B::call_base_weight(),
+			Self::HostFn => B::host_fn_weight(),
+			Self::_Phantom(_) => unreachable!(),
 		}
 	}
 }

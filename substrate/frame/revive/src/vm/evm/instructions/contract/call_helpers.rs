@@ -87,7 +87,7 @@ pub fn charge_call_gas<'a, E: Ext>(
 			if scheme.is_delegate_call() {
 				interpreter.ext.charge_or_halt(RuntimeCosts::DelegateCallBase)?;
 			} else {
-				interpreter.ext.charge_or_halt(BackendCosts::<EvmBackend>::call_base())?;
+				interpreter.ext.charge_or_halt(BackendCosts::<EvmBackend>::CallBase)?;
 			}
 
 			interpreter

@@ -1021,7 +1021,7 @@ pub mod pallet {
 					})
 					.saturating_add(
 						<BackendCosts<InterpreterBackend> as WeightToken<T>>::weight(
-							&BackendCosts::<InterpreterBackend>::host_fn(),
+							&BackendCosts::<InterpreterBackend>::HostFn,
 						),
 					)),
 				)
