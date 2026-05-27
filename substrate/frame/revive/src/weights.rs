@@ -153,6 +153,7 @@ pub trait WeightInfo {
 	fn evm_call() -> Weight;
 	fn seal_call_precompile(d: u32, i: u32, ) -> Weight;
 	fn seal_delegate_call() -> Weight;
+	fn seal_delegate_call_jit() -> Weight;
 	fn seal_instantiate(t: u32, d: u32, i: u32, ) -> Weight;
 	fn evm_instantiate(t: u32, d: u32, i: u32, ) -> Weight;
 	fn sha2_256(n: u32, ) -> Weight;
@@ -1284,6 +1285,13 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `747`
 		//  Estimated: `4212`
 		// Minimum execution time: 26_835_000 picoseconds.
+		Weight::from_parts(28_983_000, 4212)
+			.saturating_add(T::DbWeight::get().reads(3_u64))
+	}
+	/// Placeholder weight for the JIT-specific delegate call.
+	///
+	/// Overwritten by `frame-omni-bencher` when re-running the JIT benchmarks.
+	fn seal_delegate_call_jit() -> Weight {
 		Weight::from_parts(28_983_000, 4212)
 			.saturating_add(T::DbWeight::get().reads(3_u64))
 	}
@@ -2797,6 +2805,13 @@ impl WeightInfo for () {
 		//  Measured:  `747`
 		//  Estimated: `4212`
 		// Minimum execution time: 26_835_000 picoseconds.
+		Weight::from_parts(28_983_000, 4212)
+			.saturating_add(RocksDbWeight::get().reads(3_u64))
+	}
+	/// Placeholder weight for the JIT-specific delegate call.
+	///
+	/// Overwritten by `frame-omni-bencher` when re-running the JIT benchmarks.
+	fn seal_delegate_call_jit() -> Weight {
 		Weight::from_parts(28_983_000, 4212)
 			.saturating_add(RocksDbWeight::get().reads(3_u64))
 	}

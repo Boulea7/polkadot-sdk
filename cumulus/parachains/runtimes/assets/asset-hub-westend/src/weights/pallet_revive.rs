@@ -1275,6 +1275,14 @@ impl<T: frame_system::Config> pallet_revive::WeightInfo for WeightInfo<T> {
 			.saturating_add(Weight::from_parts(0, 4210))
 			.saturating_add(T::DbWeight::get().reads(3))
 	}
+	/// Placeholder weight for the JIT-specific delegate call.
+	///
+	/// Overwritten by `frame-omni-bencher` when re-running the JIT benchmarks.
+	fn seal_delegate_call_jit() -> Weight {
+		Weight::from_parts(40_580_000, 0)
+			.saturating_add(Weight::from_parts(0, 4210))
+			.saturating_add(T::DbWeight::get().reads(3))
+	}
 	/// Storage: `Revive::CodeInfoOf` (r:1 w:1)
 	/// Proof: `Revive::CodeInfoOf` (`max_values`: None, `max_size`: Some(97), added: 2572, mode: `Measured`)
 	/// Storage: UNKNOWN KEY `0x735f040a5d490f1107ad9c56f5ca00d24d6c2b03b90028f3bf407eb433e96389` (r:1 w:0)

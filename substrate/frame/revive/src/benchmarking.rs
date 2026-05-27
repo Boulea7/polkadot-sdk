@@ -2310,6 +2310,47 @@ mod benchmarks {
 		Ok(())
 	}
 
+	// JIT-forced sibling of `seal_delegate_call`. The body cost converges between
+	// backends; only the dispatch base differs. Setup duplicated rather than
+	// factored — same borrow-chain reason as `seal_call_jit`.
+	#[benchmark(pov_mode = Measured)]
+	fn seal_delegate_call_jit() {
+		let Contract { account_id: address, .. } =
+			Contract::<T>::with_index(1, VmBinaryModule::dummy(), vec![]).unwrap();
+
+		let address_bytes = address.encode();
+		let address_len = address_bytes.len() as u32;
+
+		let deposit: BalanceOf<T> = (u32::MAX - 100).into();
+		let deposit_bytes = Into::<U256>::into(deposit).encode();
+
+		let mut setup = CallSetup::<T>::default();
+		setup.set_storage_deposit_limit(deposit);
+		setup.set_origin(ExecOrigin::from_account_id(setup.contract().account_id.clone()));
+
+		let (mut ext, _) = setup.ext();
+		let mut runtime = pvm::Runtime::<_, [u8]>::new(&mut ext, vec![]);
+		let mut memory = memory!(address_bytes, deposit_bytes,);
+
+		let result;
+		#[block]
+		{
+			result = with_jit_override(true, || {
+				runtime.bench_delegate_call(
+					memory.as_mut_slice(),
+					pack_hi_lo(0, 0),        // flags + address ptr
+					u64::MAX,                // ref_time_limit
+					u64::MAX,                // proof_size_limit
+					address_len,             // deposit_ptr
+					pack_hi_lo(0, 0),        // input len + data ptr
+					pack_hi_lo(0, SENTINEL), // output len + ptr
+				)
+			});
+		}
+
+		assert_eq!(result.unwrap(), ReturnErrorCode::Success);
+	}
+
 	// t: with or without some value to transfer
 	// d: with or without dust value to transfer
 	// i: size of the input data

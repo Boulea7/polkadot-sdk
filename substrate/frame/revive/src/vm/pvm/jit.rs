@@ -89,6 +89,10 @@ impl<T: Config> WeightBackend<T> for JitBackend {
 		T::WeightInfo::seal_call_jit()
 	}
 
+	fn delegate_call_base_weight() -> Weight {
+		T::WeightInfo::seal_delegate_call_jit()
+	}
+
 	fn host_fn_weight() -> Weight {
 		T::WeightInfo::noop_host_fn_jit(1).saturating_sub(T::WeightInfo::noop_host_fn_jit(0))
 	}

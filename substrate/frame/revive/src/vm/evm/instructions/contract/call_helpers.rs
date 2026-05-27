@@ -85,7 +85,7 @@ pub fn charge_call_gas<'a, E: Ext>(
 		None => {
 			// Regular CALL / DELEGATECALL base cost / CALLCODE not supported
 			if scheme.is_delegate_call() {
-				interpreter.ext.charge_or_halt(RuntimeCosts::DelegateCallBase)?;
+				interpreter.ext.charge_or_halt(BackendCosts::<EvmBackend>::DelegateCallBase)?;
 			} else {
 				interpreter.ext.charge_or_halt(BackendCosts::<EvmBackend>::CallBase)?;
 			}

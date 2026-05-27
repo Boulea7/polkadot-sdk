@@ -36,6 +36,9 @@ pub trait WeightBackend<T: Config> {
 	/// Base cost of `seal_call` for this backend.
 	fn call_base_weight() -> Weight;
 
+	/// Base cost of `seal_delegate_call` for this backend.
+	fn delegate_call_base_weight() -> Weight;
+
 	/// Per-ecall dispatch overhead for this backend.
 	///
 	/// Derived from the per-call slope of the `noop_host_fn` family of
@@ -68,6 +71,10 @@ impl<T: Config> WeightBackend<T> for InterpreterBackend {
 		T::WeightInfo::seal_call(0, 0, 0)
 	}
 
+	fn delegate_call_base_weight() -> Weight {
+		T::WeightInfo::seal_delegate_call()
+	}
+
 	fn host_fn_weight() -> Weight {
 		T::WeightInfo::noop_host_fn(1).saturating_sub(T::WeightInfo::noop_host_fn(0))
 	}
@@ -89,10 +96,22 @@ impl<T: Config> WeightBackend<T> for EvmBackend {
 		T::WeightInfo::evm_call()
 	}
 
-	// TODO: EVM `seal_*` benchmarks measure only the raw syscall body — the
-	// EVM dispatch overhead is not captured anywhere today, so we charge
-	// nothing here. A dedicated `noop_host_fn_evm` bench would let us charge
-	// the actual EVM dispatch slope.
+	/// Preserves the pre-`BackendCosts` charging for the EVM `DELEGATECALL` opcode.
+	///
+	/// The old `RuntimeCosts::DelegateCallBase` token resolved to
+	/// `seal_delegate_call()` regardless of backend; that stays the source of
+	/// truth for the EVM opcode until a dedicated `evm_delegate_call` bench
+	/// specializes it the same way `evm_call` specializes `call_base_weight`.
+	fn delegate_call_base_weight() -> Weight {
+		T::WeightInfo::seal_delegate_call()
+	}
+
+	/// Currently zero — EVM dispatch overhead is uncharged.
+	///
+	/// TODO: EVM `seal_*` benchmarks measure only the raw syscall body, so
+	/// there is no analog of `InterpreterBackend::host_fn_weight` to charge
+	/// from. A dedicated `noop_host_fn_evm` bench would let us charge the
+	/// actual EVM dispatch slope here.
 	fn host_fn_weight() -> Weight {
 		Weight::zero()
 	}
@@ -108,6 +127,8 @@ impl<T: Config> WeightBackend<T> for EvmBackend {
 pub enum BackendCosts<B> {
 	/// Base cost of `seal_call`.
 	CallBase,
+	/// Base cost of `seal_delegate_call`.
+	DelegateCallBase,
 	/// Per-ecall dispatch overhead.
 	HostFn,
 	#[doc(hidden)]
@@ -118,6 +139,7 @@ impl<T: Config, B: WeightBackend<T> + 'static> Token<T> for BackendCosts<B> {
 	fn weight(&self) -> Weight {
 		match self {
 			Self::CallBase => B::call_base_weight(),
+			Self::DelegateCallBase => B::delegate_call_base_weight(),
 			Self::HostFn => B::host_fn_weight(),
 			Self::_Phantom(_) => unreachable!(),
 		}
@@ -223,8 +245,6 @@ pub enum RuntimeCosts {
 	GetTransientStorage(u32),
 	/// Weight of calling `seal_take_transient_storage` for the given size.
 	TakeTransientStorage(u32),
-	/// Weight of calling `seal_delegate_call` for the given input size.
-	DelegateCallBase,
 	/// Weight of calling a precompile.
 	PrecompileBase,
 	/// Weight of calling a precompile that has a contract info.
@@ -393,7 +413,6 @@ impl<T: Config> Token<T> for RuntimeCosts {
 			TakeTransientStorage(len) => {
 				cost_storage!(write_transient, seal_take_transient_storage, len)
 			},
-			DelegateCallBase => T::WeightInfo::seal_delegate_call(),
 			PrecompileBase => T::WeightInfo::seal_call_precompile(0, 0),
 			PrecompileWithInfoBase => T::WeightInfo::seal_call_precompile(1, 0),
 			PrecompileDecode(len) => cost_args!(seal_call_precompile, 0, len),

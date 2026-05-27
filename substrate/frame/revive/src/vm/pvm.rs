@@ -754,7 +754,9 @@ impl<'a, E: Ext, M: ?Sized + Memory<E::T> + MeterBackend<E::T>> Runtime<'a, E, M
 				CallType::Call { .. } => {
 					self.charge_gas(BackendCosts::<<M as MeterBackend<E::T>>::Backend>::CallBase)?
 				},
-				CallType::DelegateCall => self.charge_gas(RuntimeCosts::DelegateCallBase)?,
+				CallType::DelegateCall => self.charge_gas(
+					BackendCosts::<<M as MeterBackend<E::T>>::Backend>::DelegateCallBase,
+				)?,
 			},
 		};
 
