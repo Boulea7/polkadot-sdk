@@ -35,6 +35,13 @@ use frame_support::{DebugNoBound, EqNoBound, PartialEqNoBound};
 pub trait WeightBackend<T: Config> {
 	/// Base cost of `seal_call` for this backend.
 	fn call_base_weight() -> Weight;
+
+	/// Per-ecall dispatch overhead for this backend.
+	///
+	/// Derived from the per-call slope of the `noop_host_fn` family of
+	/// benchmarks (one per backend). Charged once per ecall in the proc-macro
+	/// emitted `handle_ecall` prelude.
+	fn host_fn_weight() -> Weight;
 }
 
 /// PolkaVM-only weight policy.
@@ -60,6 +67,10 @@ impl<T: Config> WeightBackend<T> for InterpreterBackend {
 	fn call_base_weight() -> Weight {
 		T::WeightInfo::seal_call(0, 0, 0)
 	}
+
+	fn host_fn_weight() -> Weight {
+		T::WeightInfo::noop_host_fn(1).saturating_sub(T::WeightInfo::noop_host_fn(0))
+	}
 }
 
 impl<T: Config> PolkaVmWeightBackend<T> for InterpreterBackend {
@@ -77,6 +88,14 @@ impl<T: Config> WeightBackend<T> for EvmBackend {
 	fn call_base_weight() -> Weight {
 		T::WeightInfo::evm_call()
 	}
+
+	// TODO: EVM `seal_*` benchmarks measure only the raw syscall body — the
+	// EVM dispatch overhead is not captured anywhere today, so we charge
+	// nothing here. A dedicated `noop_host_fn_evm` bench would let us charge
+	// the actual EVM dispatch slope.
+	fn host_fn_weight() -> Weight {
+		Weight::zero()
+	}
 }
 
 /// Costs that genuinely differ by execution backend.
@@ -92,11 +111,17 @@ pub struct BackendCosts<B>(BackendCostKind, PhantomData<fn(B)>);
 enum BackendCostKind {
 	/// Base cost of `seal_call`.
 	CallBase,
+	/// Per-ecall dispatch overhead.
+	HostFn,
 }
 
 impl<B> BackendCosts<B> {
 	pub const fn call_base() -> Self {
 		Self(BackendCostKind::CallBase, PhantomData)
+	}
+
+	pub const fn host_fn() -> Self {
+		Self(BackendCostKind::HostFn, PhantomData)
 	}
 }
 
@@ -104,6 +129,7 @@ impl<T: Config, B: WeightBackend<T> + 'static> Token<T> for BackendCosts<B> {
 	fn weight(&self) -> Weight {
 		match self.0 {
 			BackendCostKind::CallBase => B::call_base_weight(),
+			BackendCostKind::HostFn => B::host_fn_weight(),
 		}
 	}
 }
@@ -122,8 +148,6 @@ const WEIGHT_PER_GAS: u64 = WEIGHT_REF_TIME_PER_SECOND / GAS_PER_SECOND;
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 #[derive(Copy, Clone)]
 pub enum RuntimeCosts {
-	/// Base Weight of calling a host function.
-	HostFn,
 	/// Weight charged for executing the extcodecopy instruction.
 	ExtCodeCopy(u32),
 	/// Weight charged for copying data from the sandbox.
@@ -313,7 +337,6 @@ impl<T: Config> Token<T> for RuntimeCosts {
 	fn weight(&self) -> Weight {
 		use self::RuntimeCosts::*;
 		match *self {
-			HostFn => cost_args!(noop_host_fn, 1),
 			ExtCodeCopy(len) => T::WeightInfo::extcodecopy(len),
 			CopyToContract(len) => T::WeightInfo::seal_copy_to_contract(len),
 			CopyFromContract(len) => T::WeightInfo::seal_return(len),

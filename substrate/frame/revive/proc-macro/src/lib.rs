@@ -478,7 +478,9 @@ fn expand_functions(def: &EnvDef) -> TokenStream2 {
 		__sync_result__?;
 
 		// This is the overhead to call an empty syscall that always needs to be charged.
-		self.charge_gas(crate::vm::RuntimeCosts::HostFn).map_err(TrapReason::from)?;
+		self.charge_gas(
+			crate::vm::BackendCosts::<<M as MeterBackend<E::T>>::Backend>::host_fn()
+		).map_err(TrapReason::from)?;
 
 		// They will be mapped to variable names by the syscall specific code.
 		let (__a0__, __a1__, __a2__, __a3__, __a4__, __a5__) = memory.read_input_regs();

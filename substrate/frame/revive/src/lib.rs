@@ -61,7 +61,7 @@ use crate::{
 	sp_runtime::TransactionOutcome,
 	storage::{AccountType, DeletionQueueManager},
 	tracing::if_tracing,
-	vm::{CodeInfo, RuntimeCosts, pvm::extract_code_and_data},
+	vm::{BackendCosts, CodeInfo, InterpreterBackend, RuntimeCosts, pvm::extract_code_and_data},
 	weightinfo_extension::OnFinalizeBlockParts,
 };
 use alloc::{boxed::Box, format, vec};
@@ -1019,9 +1019,11 @@ pub mod pallet {
 						num_topic: 0,
 						len: limits::EVENT_BYTES,
 					})
-					.saturating_add(<RuntimeCosts as WeightToken<T>>::weight(
-						&RuntimeCosts::HostFn,
-					))),
+					.saturating_add(
+						<BackendCosts<InterpreterBackend> as WeightToken<T>>::weight(
+							&BackendCosts::<InterpreterBackend>::host_fn(),
+						),
+					)),
 				)
 				.unwrap()
 				.saturating_mul(limits::EVENT_BYTES.into());

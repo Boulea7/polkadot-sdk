@@ -88,6 +88,10 @@ impl<T: Config> WeightBackend<T> for JitBackend {
 	fn call_base_weight() -> Weight {
 		T::WeightInfo::seal_call_jit()
 	}
+
+	fn host_fn_weight() -> Weight {
+		T::WeightInfo::noop_host_fn_jit(1).saturating_sub(T::WeightInfo::noop_host_fn_jit(0))
+	}
 }
 
 impl<T: Config> PolkaVmWeightBackend<T> for JitBackend {
