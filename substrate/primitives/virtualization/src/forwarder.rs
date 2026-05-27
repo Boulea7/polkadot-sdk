@@ -69,6 +69,17 @@ impl Module {
 	pub fn instantiate(&self) -> Result<Instance, InstantiateError> {
 		Ok(Instance(host_fn::instantiate(self.0)?))
 	}
+
+	/// The opaque host-side handle this module wraps.
+	///
+	/// Exposed so callers driving the `compile_from_storage_key` host function via
+	/// `replace_implementation!` can repackage a `Module` returned from
+	/// [`Module::lookup`] / [`Module::from_bytes`] into a [`CompiledModule`] without
+	/// going through the raw `host_fn` symbols.
+	#[cfg(substrate_runtime)]
+	pub fn id(&self) -> ModuleId {
+		self.0
+	}
 }
 
 /// An idle virtualization instance.

@@ -135,6 +135,13 @@ where
 		sp_io::transaction_index::host_index.replace_implementation(host_transaction_index_index),
 		#[cfg(feature = "transaction-index")]
 		sp_io::transaction_index::host_renew.replace_implementation(host_transaction_index_renew),
+		// The host-side impl of `compile_from_storage_key` would read PristineCode via the
+		// PVF's `ValidationExternalities`, which panics on every storage method. Route the
+		// read into the in-WASM trie instead and delegate the actual compile to the still-
+		// host-side `compile_from_bytes`.
+		#[cfg(revive_jit)]
+		sp_virtualization::host_compile_from_storage_key
+			.replace_implementation(host_virt_compile_from_storage_key),
 	);
 
 	// V3 scheduling validation (chain-shape only). Signature verification of
@@ -665,4 +672,43 @@ fn host_transaction_index_index(_extrinsic: u32, _size: u32, _context_hash: [u8;
 #[cfg(feature = "transaction-index")]
 fn host_transaction_index_renew(_extrinsic: u32, _context_hash: [u8; 32]) {
 	// No-op host function used during parachain validation.
+}
+
+/// `replace_implementation` body for `sp_virtualization::compile_from_storage_key`.
+///
+/// The host-side impl (in `sc-virtualization`) reads the PristineCode bytes via
+/// `Externalities::storage`. Inside the PVF that goes to `ValidationExternalities`,
+/// which panics on every storage method. Route the read into the in-WASM
+/// `sp_state_machine::Ext` (backed by the PoV witness) that cumulus already exposes via
+/// `with_externalities`, then hand the bytes to the still-host-side `compile_from_bytes`
+/// so the actual polkavm compile + cache keyed by `storage_key` happens in the
+/// `VirtManagerExt` extension as before.
+#[cfg(revive_jit)]
+fn host_virt_compile_from_storage_key(
+	storage_key: &[u8],
+	child_trie: &[u8],
+) -> Result<sp_virtualization::CompiledModule, sp_virtualization::ModuleError> {
+	use sp_virtualization::{CompileStatus, CompiledModule, Module, ModuleError};
+
+	// Cache lookup — host fn, not replaced. Hits the host-side `VirtManagerExt`'s map.
+	match Module::lookup(storage_key) {
+		Ok(m) => return Ok(CompiledModule { id: m.id(), status: CompileStatus::Cached }),
+		Err(ModuleError::NotCached) => {},
+		Err(err) => return Err(err),
+	}
+
+	// Cache miss — read bytes from the in-WASM trie (`with_externalities` was pointed
+	// there by `set_and_run_with_externalities` in `run_with_externalities_and_recorder`).
+	let code = if child_trie.is_empty() {
+		with_externalities(|ext| ext.storage(storage_key))
+	} else {
+		let child_info = ChildInfo::new_default(child_trie);
+		with_externalities(|ext| ext.child_storage(&child_info, storage_key))
+	}
+	.ok_or(ModuleError::NotFound)?;
+
+	// Compile via from_bytes — host fn, not replaced. Caches under `storage_key` so a
+	// later lookup hits warm.
+	let (m, status) = Module::from_bytes(&code, Some(storage_key))?;
+	Ok(CompiledModule { id: m.id(), status })
 }

@@ -86,15 +86,35 @@ fn try_restrict(worker_info: &WorkerInfo) -> Result<()> {
 	// It's the caller's responsibility to call `Error::last_os_error`. Note that that alone does
 	// not give the context of which call failed, so we return a &str error.
 	|| -> std::result::Result<(), &'static str> {
+		// 1. `unshare` the user and the mount namespaces.
+		// SAFETY: no preconditions beyond running single-threaded (caller's responsibility).
+		if unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) } < 0 {
+			return Err("unshare user and mount namespaces");
+		}
+
+		// Establish a 1-line identity uid/gid map in the new user namespace so the
+		// worker's EUID/EGID have a mapping in it. Without this, attempts to create
+		// nested user namespaces fail with EPERM (see clone(2)). PolkaVM needs this
+		// when spawning a new sandbox, which is in turn needed for the
+		// `sp_virtualization` host functions.
+		// SAFETY: getuid is documented as never failing.
+		let uid = unsafe { libc::getuid() };
+		// SAFETY: getgid is documented as never failing.
+		let gid = unsafe { libc::getgid() };
+		if std::fs::write("/proc/self/setgroups", "deny").is_err() {
+			return Err("write /proc/self/setgroups");
+		}
+		if std::fs::write("/proc/self/uid_map", format!("{uid} {uid} 1")).is_err() {
+			return Err("write /proc/self/uid_map");
+		}
+		if std::fs::write("/proc/self/gid_map", format!("{gid} {gid} 1")).is_err() {
+			return Err("write /proc/self/gid_map");
+		}
+
 		// SAFETY: We pass null-terminated C strings and use the APIs as documented. In fact, steps
 		//         (2) and (3) are adapted from the example in pivot_root(2), with the additional
 		//         change described in the `pivot_root(".", ".")` section.
 		unsafe {
-			// 1. `unshare` the user and the mount namespaces.
-			if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) < 0 {
-				return Err("unshare user and mount namespaces");
-			}
-
 			// 2. Setup mounts.
 			//
 			// Ensure that new root and its parent mount don't have shared propagation (which would
@@ -165,4 +185,54 @@ fn try_restrict(worker_info: &WorkerInfo) -> Result<()> {
 	}
 
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::thread;
+
+	/// Nested `CLONE_NEWUSER` succeeds inside the namespace established by `try_restrict`.
+	///
+	/// Regression test for PolkaVM's sandbox EPERM-ing inside the PVF execute worker when the
+	/// identity `uid_map`/`gid_map` writes after `unshare(CLONE_NEWUSER | CLONE_NEWNS)` were
+	/// missing.
+	#[test]
+	fn nested_user_namespace_works_after_restrict() {
+		// Probe in a throwaway thread so `check_can_fully_enable`'s `pivot_root` side-effects
+		// don't leak to the test thread. Skip when the host can't support the full sequence
+		// (Docker without `--privileged`, kernel without `CONFIG_USER_NS`, etc.) — same
+		// convention used by the sibling `seccomp::tests` / `landlock::tests`.
+		let probe_tmp = tempfile::tempdir().unwrap();
+		let probe_dir = probe_tmp.path().to_owned();
+		let supported = thread::spawn(move || check_can_fully_enable(&probe_dir).is_ok())
+			.join()
+			.unwrap_or(false);
+		if !supported {
+			return;
+		}
+
+		let tmp = tempfile::tempdir().unwrap();
+		let worker_dir = tmp.path().to_owned();
+		let handle = thread::spawn(move || {
+			try_restrict(&WorkerInfo {
+				pid: std::process::id(),
+				kind: WorkerKind::CheckPivotRoot,
+				version: None,
+				worker_dir_path: worker_dir,
+			})
+			.expect("try_restrict failed in a supported environment");
+
+			// The exact syscall PolkaVM issues to spawn its sandbox.
+			// SAFETY: single-threaded (just spawned).
+			let rc = unsafe { libc::unshare(libc::CLONE_NEWUSER) };
+			assert_eq!(
+				rc,
+				0,
+				"nested unshare(CLONE_NEWUSER) failed: {}",
+				std::io::Error::last_os_error()
+			);
+		});
+		assert!(handle.join().is_ok());
+	}
 }
