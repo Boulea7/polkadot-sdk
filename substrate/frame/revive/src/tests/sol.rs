@@ -17,10 +17,11 @@
 
 use crate::{
 	BalanceOf, Code, Config, Error, EthBlockBuilderFirstValues, GenesisConfig, Origin, Pallet,
-	PristineCode, assert_refcount,
+	assert_refcount,
 	call_builder::VmBinaryModule,
 	debug::DebugSettings,
 	evm::{PrestateTrace, PrestateTracer, PrestateTracerConfig},
+	pristine_code,
 	test_utils::{ALICE, ALICE_ADDR, BOB, builder::Contract},
 	tests::{
 		AllowEvmBytecode, DebugFlag, ExtBuilder, RuntimeOrigin, Test, builder,
@@ -103,7 +104,7 @@ fn basic_evm_flow_works() {
 		}
 
 		// init code is not stored
-		assert!(!PristineCode::<Test>::contains_key(init_hash));
+		assert!(!pristine_code::exists::<Test>(&init_hash));
 	});
 }
 
@@ -126,7 +127,7 @@ fn basic_evm_flow_tracing_works() {
 		});
 
 		let contract = get_contract(&addr);
-		let runtime_code = PristineCode::<Test>::get(contract.code_hash).unwrap();
+		let runtime_code = pristine_code::get::<Test>(&contract.code_hash).unwrap();
 
 		let call_trace = tracer.collect_trace().unwrap();
 		assert_eq!(
@@ -334,7 +335,7 @@ fn upload_and_remove_code_works_for_evm() {
 		let _ = Pallet::<Test>::set_evm_balance(&ALICE_ADDR, 5_000_000_000u64.into());
 
 		// Ensure the code is not already stored.
-		assert!(!PristineCode::<Test>::contains_key(&code_hash));
+		assert!(!pristine_code::exists::<Test>(&code_hash));
 
 		// Upload the code.
 		assert_ok!(Pallet::<Test>::upload_code(RuntimeOrigin::signed(ALICE), code, 1000u128));
@@ -346,7 +347,7 @@ fn upload_and_remove_code_works_for_evm() {
 		assert_ok!(Pallet::<Test>::remove_code(RuntimeOrigin::signed(ALICE), code_hash));
 
 		// Ensure the code is no longer stored.
-		assert!(!PristineCode::<Test>::contains_key(&code_hash));
+		assert!(!pristine_code::exists::<Test>(&code_hash));
 	});
 }
 
@@ -810,10 +811,10 @@ fn execution_tracing_works() {
 					// compiled the fixtures (older emits call/delegate_call,
 					// newer emits call_evm/delegate_call_evm).
 					use crate::vm::pvm::env::lookup_syscall_index;
-					let call_idx = lookup_syscall_index("call").unwrap();
-					let call_evm_idx = lookup_syscall_index("call_evm").unwrap();
-					let delegate_idx = lookup_syscall_index("delegate_call").unwrap();
-					let delegate_evm_idx = lookup_syscall_index("delegate_call_evm").unwrap();
+					let call_idx = lookup_syscall_index(b"call").unwrap();
+					let call_evm_idx = lookup_syscall_index(b"call_evm").unwrap();
+					let delegate_idx = lookup_syscall_index(b"delegate_call").unwrap();
+					let delegate_evm_idx = lookup_syscall_index(b"delegate_call_evm").unwrap();
 					if *op == call_idx || *op == call_evm_idx {
 						*op = call_evm_idx;
 						// Clear args since the two variants have compatible

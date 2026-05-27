@@ -216,14 +216,6 @@ pub mod code {
 					log::debug!(target: LOG_TARGET, "sbrk instruction is not allowed. offset {}", inst.offset);
 					return Err(<Error<T>>::InvalidInstruction.into());
 				},
-				// Only benchmarking code is allowed to circumvent the import table. We might want
-				// to remove this magic syscall number later. Hence we need to prevent contracts
-				// from using it.
-				#[cfg(not(feature = "runtime-benchmarks"))]
-				Instruction::ecalli(idx) if idx == crate::SENTINEL => {
-					log::debug!(target: LOG_TARGET, "reserved syscall idx {idx}. offset {}", inst.offset);
-					return Err(<Error<T>>::InvalidInstruction.into());
-				},
 				_ => (),
 			}
 		}

@@ -585,7 +585,7 @@ pub enum ExecutionStepKind {
 			serialize_with = "serialize_syscall_op",
 			deserialize_with = "deserialize_syscall_op"
 		)]
-		op: u8,
+		op: u32,
 		/// The syscall arguments (register values a0-a5).
 		/// Omitted when `disable_syscall_details` is true in ExecutionTracerConfig.
 		#[serde(default, skip_serializing_if = "Vec::is_empty", with = "super::hex_serde::vec")]
@@ -795,7 +795,7 @@ where
 }
 
 /// Serialize a syscall index to its name
-fn serialize_syscall_op<S>(idx: &u8, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_syscall_op<S>(idx: &u32, serializer: S) -> Result<S::Ok, S::Error>
 where
 	S: serde::Serializer,
 {
@@ -818,7 +818,7 @@ where
 }
 
 /// Deserialize syscall from string name to index
-fn deserialize_syscall_op<'de, D>(deserializer: D) -> Result<u8, D::Error>
+fn deserialize_syscall_op<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where
 	D: serde::Deserializer<'de>,
 {
@@ -827,7 +827,7 @@ where
 	let ops = list_trace_ops();
 	ops.iter()
 		.position(|name| core::str::from_utf8(name).unwrap_or_default() == s)
-		.map(|i| i as u8)
+		.map(|i| i as u32)
 		.ok_or_else(|| serde::de::Error::custom(alloc::format!("Unknown trace op: {}", s)))
 }
 

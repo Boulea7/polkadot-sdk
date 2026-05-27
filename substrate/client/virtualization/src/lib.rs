@@ -20,20 +20,53 @@
 //!
 //! Provides the concrete [`VirtManager`] that drives `polkavm` to compile, instantiate
 //! and execute programs on behalf of the runtime. Register it with the externalities via
-//! [`sp_virtualization::VirtManagerExt::new`].
+//! [`sp_virtualization::VirtManagerExt::new`] — or use the [`default_extension`] helper
+//! and [`ExtensionsFactory`] convenience types defined below.
 
 use polkavm::{
 	CacheModel, CompileError, Config, CostModelKind, Engine, GasMeteringKind, InterruptKind,
 	MemoryAccessError, Module, ModuleConfig, ProgramCounter, RawInstance, Reg,
 };
+use sp_externalities::Extensions;
+use sp_runtime::traits::{Block as BlockT, NumberFor};
 use sp_virtualization::{
 	DestroyError, ExecBuffer, ExecError, ExecStatus, InstanceId, InstantiateError, MemoryError,
-	ModuleError, ModuleId, SyscallSymbol, VirtManagerBackend, LOG_TARGET,
+	ModuleError, ModuleId, SyscallSymbol, VirtManagerBackend, VirtManagerExt, LOG_TARGET,
 };
 use std::{
 	collections::HashMap,
 	sync::{Arc, LazyLock},
 };
+
+/// Build a fresh [`VirtManagerExt`] backed by a default [`VirtManager`].
+///
+/// Use this where you would otherwise hand-roll
+/// `VirtManagerExt::new(VirtManager::default())` — e.g. when registering the
+/// extension directly on a `TestExternalities` or an `Extensions` set.
+pub fn default_extension() -> VirtManagerExt {
+	VirtManagerExt::new(VirtManager::default())
+}
+
+/// An [`sc_client_api::execution_extensions::ExtensionsFactory`] that registers a fresh
+/// [`VirtManagerExt`] (backed by a default [`VirtManager`]) for every runtime call.
+///
+/// Plug this into a client via
+/// `client.execution_extensions().set_extensions_factory(ExtensionsFactory)`.
+/// [`VirtManagerExt`] cannot implement `Default` (its backend lives in this crate, and
+/// `sp-virtualization` is intentionally backend-free), so the stock
+/// [`sc_client_api::execution_extensions::ExtensionBeforeBlock`] helper cannot be used.
+#[derive(Default)]
+pub struct ExtensionsFactory;
+
+impl<Block: BlockT> sc_client_api::execution_extensions::ExtensionsFactory<Block>
+	for ExtensionsFactory
+{
+	fn extensions_for(&self, _: Block::Hash, _: NumberFor<Block>) -> Extensions {
+		let mut exts = Extensions::new();
+		exts.register(default_extension());
+		exts
+	}
+}
 
 /// This is the single PolkaVM engine we use for everything.
 ///

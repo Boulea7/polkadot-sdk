@@ -19,7 +19,6 @@
 //! Native host-side tests exercising the [`VirtManager`] backend through the
 //! virtualization host functions.
 
-use sc_virtualization::VirtManager;
 use sp_virtualization::{
 	tests::{make_handler, run_loop, RunResult, GAS_MAX},
 	CompileStatus, Module, ModuleError,
@@ -28,7 +27,7 @@ use sp_virtualization::{
 fn setup() -> sp_io::TestExternalities {
 	sp_tracing::try_init_simple();
 	let mut ext = sp_io::TestExternalities::default();
-	ext.register_extension(sp_virtualization::VirtManagerExt::new(VirtManager::default()));
+	ext.register_extension(sc_virtualization::default_extension());
 	ext
 }
 

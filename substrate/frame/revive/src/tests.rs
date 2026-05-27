@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use crate::{
 	self as pallet_revive, AccountId32Mapper, AddressMapper, BalanceOf, BalanceWithDust, Call,
 	CodeInfoOf, Config, DelegateInfo, ExecOrigin as Origin, ExecReturnValue, GenesisConfig,
-	OriginFor, Pallet, PristineCode,
+	OriginFor, Pallet,
 	deposit_payment::PGasDeposit,
 	evm::{
 		fees::{BlockRatioFee, Info as FeeInfo},
@@ -36,6 +36,7 @@ use crate::{
 	},
 	genesis::{Account, ContractData},
 	mock::MockHandler,
+	pristine_code,
 	test_utils::*,
 };
 use frame_support::{
@@ -125,7 +126,7 @@ pub mod test_utils {
 	};
 	use crate::{
 		AccountInfo, AccountInfoOf, BalanceOf, CodeInfo, CodeInfoOf, Config, ContractInfo,
-		PristineCode, address::AddressMapper, exec::AccountIdOf,
+		address::AddressMapper, exec::AccountIdOf, pristine_code,
 	};
 	use codec::{Encode, MaxEncodedLen};
 	use frame_support::traits::fungible::{InspectHold, Mutate};
@@ -194,7 +195,7 @@ pub mod test_utils {
 		// Assert that code_info is stored
 		assert!(CodeInfoOf::<Test>::contains_key(&code_hash));
 		// Assert that contract code is stored, and get its size.
-		PristineCode::<Test>::try_get(&code_hash).unwrap().len()
+		pristine_code::get::<Test>(&code_hash).unwrap().len()
 	}
 	pub fn u256_bytes(u: u64) -> [u8; 32] {
 		let mut buffer = [0u8; 32];
@@ -583,6 +584,8 @@ impl ExtBuilder {
 		}
 		let mut ext = sp_io::TestExternalities::new(t);
 		ext.register_extension(KeystoreExt::new(MemoryKeystore::new()));
+		#[cfg(any(revive_jit, feature = "runtime-benchmarks"))]
+		ext.register_extension(sc_virtualization::default_extension());
 		ext.execute_with(|| {
 			use frame_support::traits::OnGenesis;
 
@@ -714,7 +717,7 @@ fn ext_builder_with_genesis_config_works() {
 			)));
 
 			assert_eq!(
-				PristineCode::<Test>::get(&contract_info.code_hash).unwrap(),
+				pristine_code::get::<Test>(&contract_info.code_hash).unwrap(),
 				contract_data.code.0
 			);
 			assert_eq!(Pallet::<Test>::evm_nonce(&contract.address), contract.nonce);
