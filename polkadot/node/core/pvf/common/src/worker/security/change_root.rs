@@ -21,7 +21,14 @@ use crate::{
 	worker::{WorkerInfo, WorkerKind},
 	LOG_TARGET,
 };
-use std::{env, ffi::CString, io, os::unix::ffi::OsStrExt, path::Path, ptr};
+use std::{
+	env,
+	ffi::CString,
+	io::{self, Write},
+	os::unix::ffi::OsStrExt,
+	path::Path,
+	ptr,
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -92,22 +99,29 @@ fn try_restrict(worker_info: &WorkerInfo) -> Result<()> {
 			return Err("unshare user and mount namespaces");
 		}
 
-		// Establish a 1-line identity uid/gid map in the new user namespace so the
-		// worker's EUID/EGID have a mapping in it. Without this, attempts to create
-		// nested user namespaces fail with EPERM (see clone(2)). PolkaVM needs this
-		// when spawning a new sandbox, which is in turn needed for the
-		// `sp_virtualization` host functions.
+		// Identity-map the worker's uid/gid in the new user namespace. Without a
+		// mapping the worker's uid is unmapped here, so a nested `CLONE_NEWUSER`
+		// (which PolkaVM's JIT sandbox performs) is denied with EPERM; see clone(2)
+		// and `create_user_ns`. The worker is never setuid, so its uid equals its euid
+		// — the credential that check actually consults.
+		//
+		// Open write-only without `O_CREAT`/`O_TRUNC` — which `std::fs::write` would
+		// add, and which older kernels reject on the `/proc/self/*_map` files. This
+		// mirrors how polkavm's own sandbox writes them.
+		let write_proc = |path: &str, data: &str| -> io::Result<()> {
+			std::fs::OpenOptions::new().write(true).open(path)?.write_all(data.as_bytes())
+		};
 		// SAFETY: getuid is documented as never failing.
 		let uid = unsafe { libc::getuid() };
 		// SAFETY: getgid is documented as never failing.
 		let gid = unsafe { libc::getgid() };
-		if std::fs::write("/proc/self/setgroups", "deny").is_err() {
+		if write_proc("/proc/self/setgroups", "deny").is_err() {
 			return Err("write /proc/self/setgroups");
 		}
-		if std::fs::write("/proc/self/uid_map", format!("{uid} {uid} 1")).is_err() {
+		if write_proc("/proc/self/uid_map", &format!("{uid} {uid} 1")).is_err() {
 			return Err("write /proc/self/uid_map");
 		}
-		if std::fs::write("/proc/self/gid_map", format!("{gid} {gid} 1")).is_err() {
+		if write_proc("/proc/self/gid_map", &format!("{gid} {gid} 1")).is_err() {
 			return Err("write /proc/self/gid_map");
 		}
 
@@ -190,49 +204,91 @@ fn try_restrict(worker_info: &WorkerInfo) -> Result<()> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::thread;
 
-	/// Nested `CLONE_NEWUSER` succeeds inside the namespace established by `try_restrict`.
+	/// Runs `probe` in a `fork`ed child and returns its exit code, or `None` if it
+	/// did not exit normally.
 	///
-	/// Regression test for PolkaVM's sandbox EPERM-ing inside the PVF execute worker when the
-	/// identity `uid_map`/`gid_map` writes after `unshare(CLONE_NEWUSER | CLONE_NEWNS)` were
-	/// missing.
+	/// `unshare(CLONE_NEWUSER)` is only permitted in a single-threaded process, but
+	/// the test harness is multi-threaded. A `fork`ed child inherits only the calling
+	/// thread, so it *is* single-threaded — whereas a spawned thread would leave the
+	/// process multi-threaded and the call would fail with EINVAL. Forking also keeps
+	/// `try_restrict`'s `pivot_root` from clobbering the test process itself.
+	fn exit_code_of_forked(probe: impl FnOnce() -> i32) -> Option<i32> {
+		// SAFETY: the child runs `probe` then `_exit`s; it never returns into libtest.
+		match unsafe { libc::fork() } {
+			-1 => panic!("fork failed: {}", std::io::Error::last_os_error()),
+			0 => {
+				let code = probe();
+				// SAFETY: child path — `_exit` without unwinding back into the harness
+				// or running destructors.
+				unsafe { libc::_exit(code) }
+			},
+			child => {
+				let mut status: libc::c_int = 0;
+				// SAFETY: `status` is a valid out-pointer for the duration of the call.
+				if unsafe { libc::waitpid(child, &mut status, 0) } < 0 {
+					panic!("waitpid failed: {}", std::io::Error::last_os_error());
+				}
+				if libc::WIFEXITED(status) {
+					Some(libc::WEXITSTATUS(status))
+				} else {
+					None
+				}
+			},
+		}
+	}
+
+	/// A nested `CLONE_NEWUSER` — the user-namespace creation PolkaVM's JIT sandbox
+	/// performs — succeeds inside the namespace established by `try_restrict`.
+	///
+	/// Regression test for the PVF execute worker denying that sandbox: without an
+	/// identity uid/gid map in the worker's new user namespace, the worker's uid is
+	/// unmapped there and the nested `CLONE_NEWUSER` returns EPERM.
 	#[test]
 	fn nested_user_namespace_works_after_restrict() {
-		// Probe in a throwaway thread so `check_can_fully_enable`'s `pivot_root` side-effects
-		// don't leak to the test thread. Skip when the host can't support the full sequence
-		// (Docker without `--privileged`, kernel without `CONFIG_USER_NS`, etc.) — same
-		// convention used by the sibling `seccomp::tests` / `landlock::tests`.
-		let probe_tmp = tempfile::tempdir().unwrap();
-		let probe_dir = probe_tmp.path().to_owned();
-		let supported = thread::spawn(move || check_can_fully_enable(&probe_dir).is_ok())
-			.join()
-			.unwrap_or(false);
-		if !supported {
+		// Skip only when the host genuinely cannot create user namespaces at all (e.g.
+		// Docker without `--privileged`), never because our own sequence failed — that
+		// is the regression under test. Mirrors the `seccomp`/`landlock` skip style.
+		let host_supports_userns = exit_code_of_forked(|| {
+			// SAFETY: single-threaded (just forked).
+			if unsafe { libc::unshare(libc::CLONE_NEWUSER) } == 0 {
+				0
+			} else {
+				1
+			}
+		});
+		if host_supports_userns != Some(0) {
 			return;
 		}
 
 		let tmp = tempfile::tempdir().unwrap();
 		let worker_dir = tmp.path().to_owned();
-		let handle = thread::spawn(move || {
-			try_restrict(&WorkerInfo {
+		let code = exit_code_of_forked(move || {
+			let worker_info = WorkerInfo {
 				pid: std::process::id(),
 				kind: WorkerKind::CheckPivotRoot,
 				version: None,
 				worker_dir_path: worker_dir,
-			})
-			.expect("try_restrict failed in a supported environment");
-
-			// The exact syscall PolkaVM issues to spawn its sandbox.
-			// SAFETY: single-threaded (just spawned).
-			let rc = unsafe { libc::unshare(libc::CLONE_NEWUSER) };
-			assert_eq!(
-				rc,
-				0,
-				"nested unshare(CLONE_NEWUSER) failed: {}",
-				std::io::Error::last_os_error()
-			);
+			};
+			if let Err(err) = try_restrict(&worker_info) {
+				eprintln!("try_restrict failed: {err}");
+				return 1;
+			}
+			// The nested user namespace PolkaVM's sandbox creates after the worker has
+			// already unshared one. SAFETY: single-threaded (just forked).
+			if unsafe { libc::unshare(libc::CLONE_NEWUSER) } != 0 {
+				eprintln!(
+					"nested unshare(CLONE_NEWUSER) after restrict failed: {}",
+					std::io::Error::last_os_error()
+				);
+				return 2;
+			}
+			0
 		});
-		assert!(handle.join().is_ok());
+		assert_eq!(
+			code,
+			Some(0),
+			"creating a nested user namespace after try_restrict failed (see child stderr)",
+		);
 	}
 }
