@@ -93,28 +93,33 @@ fn try_restrict(worker_info: &WorkerInfo) -> Result<()> {
 	// It's the caller's responsibility to call `Error::last_os_error`. Note that that alone does
 	// not give the context of which call failed, so we return a &str error.
 	|| -> std::result::Result<(), &'static str> {
+		// Read the uid/gid *before* unsharing. Once in the new user namespace they read
+		// as the overflow id (65534) until a map is written, and the unprivileged
+		// single-line `uid_map` write requires the outside id to equal the writer's id
+		// in the parent namespace — writing the overflow id is rejected with EPERM.
+		// SAFETY: getuid is documented as never failing.
+		let uid = unsafe { libc::getuid() };
+		// SAFETY: getgid is documented as never failing.
+		let gid = unsafe { libc::getgid() };
+
 		// 1. `unshare` the user and the mount namespaces.
 		// SAFETY: no preconditions beyond running single-threaded (caller's responsibility).
 		if unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) } < 0 {
 			return Err("unshare user and mount namespaces");
 		}
 
-		// Identity-map the worker's uid/gid in the new user namespace. Without a
-		// mapping the worker's uid is unmapped here, so a nested `CLONE_NEWUSER`
-		// (which PolkaVM's JIT sandbox performs) is denied with EPERM; see clone(2)
-		// and `create_user_ns`. The worker is never setuid, so its uid equals its euid
-		// — the credential that check actually consults.
+		// Establish a 1-line identity uid/gid map so the worker's id is mapped in the
+		// new user namespace. Without it, a nested `CLONE_NEWUSER` — which PolkaVM's
+		// JIT sandbox performs — is denied with EPERM (see clone(2) / `create_user_ns`).
+		// `setgroups=deny` must come first, per the CVE-2014-8989 mitigation.
 		//
-		// Open write-only without `O_CREAT`/`O_TRUNC` — which `std::fs::write` would
-		// add, and which older kernels reject on the `/proc/self/*_map` files. This
-		// mirrors how polkavm's own sandbox writes them.
+		// Open each O_WRONLY and write once. `std::fs::write` would add `O_TRUNC`, whose
+		// effect on these procfs files is unspecified (open(2)); the kernel also requires
+		// `uid_map` to arrive in a single `write`, which `write_all` satisfies for this
+		// tiny buffer. Mirrors how runc / polkavm write these files.
 		let write_proc = |path: &str, data: &str| -> io::Result<()> {
 			std::fs::OpenOptions::new().write(true).open(path)?.write_all(data.as_bytes())
 		};
-		// SAFETY: getuid is documented as never failing.
-		let uid = unsafe { libc::getuid() };
-		// SAFETY: getgid is documented as never failing.
-		let gid = unsafe { libc::getgid() };
 		if write_proc("/proc/self/setgroups", "deny").is_err() {
 			return Err("write /proc/self/setgroups");
 		}
