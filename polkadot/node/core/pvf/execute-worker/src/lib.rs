@@ -44,7 +44,7 @@ use polkadot_node_core_pvf_common::{
 	execute::{
 		ExecuteRequest, Handshake, JobError, JobResponse, JobResult, WorkerError, WorkerResponse,
 	},
-	executor_interface::params_to_wasmtime_semantics,
+	executor_interface::{init_virtualization, params_to_wasmtime_semantics},
 	framed_recv_blocking, framed_send_blocking,
 	worker::{
 		cpu_time_monitor_loop, get_total_cpu_usage, pipe2_cloexec, recv_child_response, run_worker,
@@ -154,6 +154,11 @@ pub fn worker_entrypoint(
 
 			let executor_params: Arc<ExecutorParams> = Arc::new(executor_params);
 			let execute_thread_stack_size = max_stack_size(&executor_params);
+
+			// Build the host-side PolkaVM engine and warm its sandbox pool now, once, so the
+			// first validation doesn't pay for engine construction or sandbox spawning. No-op
+			// unless this is a `revive_jit` build.
+			init_virtualization();
 
 			loop {
 				let request = recv_request(&mut stream).map_err(|e| {
