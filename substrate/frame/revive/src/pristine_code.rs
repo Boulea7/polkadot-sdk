@@ -20,9 +20,8 @@
 //! The value at each key is the bytecode blob exactly as uploaded — no SCALE
 //! wrapper. The storage trie already delimits each value, so an in-band length
 //! prefix would only duplicate information already carried by the trie node,
-//! and would corrupt the leading `BLOB_MAGIC` bytes that the JIT host-side
-//! `compile_from_storage_key` expects at the start of the value. Mirrors the
-//! convention used by Substrate's runtime wasm storage (`:code`).
+//! and would corrupt the leading `BLOB_MAGIC` bytes the JIT compiler expects at the start of
+//! the value. Mirrors the convention used by Substrate's runtime wasm storage (`:code`).
 
 use alloc::vec::Vec;
 use frame_support::{storage::unhashed, traits::PalletInfo};
@@ -71,9 +70,8 @@ pub fn exists<T: Config>(hash: &H256) -> bool {
 
 /// The trie key under which the blob for `hash` is stored.
 ///
-/// Exposed for callers that hand the key to host functions (e.g. the JIT
-/// `from_storage_key` compile path) instead of going through [`get`] /
-/// [`insert`] in the runtime.
+/// Exposed so the JIT path can reuse it as the stable per-block cache identifier when compiling
+/// the loaded bytes via `Module::from_bytes`, keeping the module cache keyed consistently.
 #[cfg(any(revive_jit, feature = "runtime-benchmarks"))]
 pub fn storage_key<T: Config>(hash: &H256) -> [u8; 64] {
 	key::<T>(hash)

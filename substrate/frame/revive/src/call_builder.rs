@@ -190,7 +190,7 @@ where
 		aux_data_size: u32,
 	) -> PreparedCall<'a, StackExt<'a, T>, InterpreterInstance> {
 		PreparedCall::new_interpreter(
-			module.code().unwrap().to_vec(),
+			module.code().to_vec(),
 			Runtime::new(ext, input),
 			ExportedFunction::Call,
 			aux_data_size,

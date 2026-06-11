@@ -232,9 +232,9 @@ pub fn prepare(
 ///
 /// Parachain runtimes built with `--cfg revive_jit` import the `ext_virtualization_*`
 /// host functions for JIT contract execution. We include them so those candidates can be
-/// validated. The cache-miss storage read inside `compile_from_storage_key` is routed
-/// back into the in-WASM `validate_block` trie via cumulus's `replace_implementation!`
-/// mechanism, so it does not trip `ValidationExternalities`' storage panics.
+/// validated. The runtime reads the contract code from its own (witness-backed) storage and
+/// hands the bytes to the host `compile`, so no virtualization host function reaches for
+/// `ValidationExternalities`' storage — which would otherwise panic.
 ///
 /// On a non-revive_jit build this resolves to `()`, which is a no-op
 /// `HostFunctions` impl per `sp_wasm_interface`.

@@ -373,7 +373,7 @@ impl VirtManager {
 }
 
 impl VirtManagerBackend for VirtManager {
-	fn compile_from_bytes(
+	fn compile(
 		&mut self,
 		program: &[u8],
 		identifier: Option<&[u8]>,
@@ -496,22 +496,22 @@ mod tests {
 		let key: &[u8] = b"some-key";
 
 		let mut a = VirtManager::default();
-		a.compile_from_bytes(program, Some(key)).unwrap();
+		a.compile(program, Some(key)).unwrap();
 		assert!(matches!(a.lookup(key), Ok(_)));
 
 		let mut b = VirtManager::default();
 		assert!(matches!(b.lookup(key), Err(ModuleError::NotCached)));
 	}
 
-	/// Passing `None` to `compile_from_bytes` must not populate the cache.
+	/// Passing `None` to `compile` must not populate the cache.
 	#[test]
-	fn compile_from_bytes_none_skips_cache() {
+	fn compile_none_skips_cache() {
 		ensure_engine();
 		let program = sp_virtualization_test_fixture::binary();
 		let key: &[u8] = b"would-be-key";
 
 		let mut m = VirtManager::default();
-		m.compile_from_bytes(program, None).unwrap();
+		m.compile(program, None).unwrap();
 		assert!(matches!(m.lookup(key), Err(ModuleError::NotCached)));
 	}
 

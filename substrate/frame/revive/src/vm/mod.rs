@@ -48,14 +48,12 @@ pub use pvm::with_jit_override;
 
 /// Validated Vm module ready for execution.
 ///
-/// This data structure is immutable once created and stored. `code` is
-/// `Some(bytes)` on the fresh-upload and interpreter-load paths and
-/// `None` on the JIT load-from-storage path, where the host fetches
-/// `PristineCode` itself via the storage key during compile so the
-/// runtime never holds the bytes. The backend (interpreter vs host JIT)
-/// is consulted at execute time via `pvm::is_jit`, not encoded here.
+/// This data structure is immutable once created and stored. `code` always carries the
+/// program bytes (the provided bytes on the fresh-upload path, or `PristineCode` loaded in the
+/// runtime on the load path). The backend (interpreter vs host JIT) is consulted at execute
+/// time via `pvm::is_jit`, not encoded here.
 pub struct ContractBlob<T: Config> {
-	code: Option<Vec<u8>>,
+	code: Vec<u8>,
 	code_info: CodeInfo<T>,
 	// This is for not calculating the hash every time we need it.
 	code_hash: H256,
@@ -219,10 +217,7 @@ impl<T: Config> ContractBlob<T> {
 
 					meter.charge_deposit(&StorageDeposit::Charge(deposit))?;
 
-					// `store_code` only ever runs against freshly-uploaded
-					// contracts, so the blob always carries the raw bytes here.
-					let bytes = self.code.as_deref().ok_or(<Error<T>>::CodeRejected)?;
-					pristine_code::insert::<T>(&code_hash, bytes);
+					pristine_code::insert::<T>(&code_hash, &self.code);
 					*stored_code_info = Some(self.code_info.clone());
 					Ok(deposit)
 				},
@@ -339,14 +334,9 @@ impl<T: Config> Executable<T> for ContractBlob<T> {
 	) -> Result<Self, DispatchError> {
 		let code_info = <CodeInfoOf<T>>::get(code_hash).ok_or(Error::<T>::CodeNotFound)?;
 
-		#[cfg(any(revive_jit, feature = "runtime-benchmarks"))]
-		if pvm::is_jit() && code_info.is_pvm() {
-			return Ok(Self { code: None, code_info, code_hash });
-		}
-
 		meter.charge_weight_token(CodeLoadToken::from_code_info(&code_info))?;
 		let code = pristine_code::get::<T>(&code_hash).ok_or(Error::<T>::CodeNotFound)?;
-		Ok(Self { code: Some(code), code_info, code_hash })
+		Ok(Self { code, code_info, code_hash })
 	}
 
 	fn from_evm_init_code(code: Vec<u8>, owner: AccountIdOf<T>) -> Result<Self, DispatchError> {
@@ -366,7 +356,7 @@ impl<T: Config> Executable<T> for ContractBlob<T> {
 					PreparedCall::new_jit(&self, pvm::Runtime::new(ext, input_data), function)?;
 				return prepared_call.call();
 			}
-			let code = self.code.ok_or(<Error<T>>::CodeRejected)?;
+			let code = self.code;
 			let prepared_call = PreparedCall::new_interpreter(
 				code,
 				pvm::Runtime::new(ext, input_data),
@@ -376,7 +366,7 @@ impl<T: Config> Executable<T> for ContractBlob<T> {
 			prepared_call.call()
 		} else if T::AllowEVMBytecode::get() {
 			use revm::bytecode::Bytecode;
-			let bytes = self.code.ok_or(<Error<T>>::CodeRejected)?;
+			let bytes = self.code;
 			let bytecode = Bytecode::new_raw(bytes.into());
 			evm::call(bytecode, ext, input_data)
 		} else {
@@ -384,8 +374,8 @@ impl<T: Config> Executable<T> for ContractBlob<T> {
 		}
 	}
 
-	fn code(&self) -> Option<&[u8]> {
-		self.code.as_deref()
+	fn code(&self) -> &[u8] {
+		&self.code
 	}
 
 	fn code_hash(&self) -> &H256 {

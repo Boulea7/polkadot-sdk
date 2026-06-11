@@ -20,9 +20,9 @@
 //! Declared as a submodule of [`super`] (the polkavm host integration) under
 //! `cfg(any(revive_jit, feature = "runtime-benchmarks"))`, so every item
 //! defined here is automatically gated and has private-field access to
-//! `PreparedCall`. The few hand-off points outside this module that decide
-//! the JIT backend (the `from_storage` JIT short-circuit and the `is_jit()`
-//! dispatch in `ContractBlob::execute`) still need their own cfg attribute.
+//! `PreparedCall`. The one hand-off point outside this module that decides the
+//! JIT backend (the `is_jit()` dispatch in `ContractBlob::execute`) still needs
+//! its own cfg attribute.
 
 use super::{Interrupt, Memory, MeterBackend, PolkaVmInstance, PreparedCall, Runtime};
 use crate::{
@@ -109,12 +109,11 @@ impl<T: Config> PolkaVmWeightBackend<T> for JitBackend {
 	}
 }
 
-/// Compile-time cost of loading + JIT-compiling a contract.
+/// Compile-time cost of JIT-compiling a contract.
 ///
-/// Used for pre-charge / refund around the host-side
-/// [`sp_virtualization::Module::from_storage_key`] call: `Cold` pre-charges
-/// the worst case (cache miss, the host actually compiles); `Warm` is what
-/// we refund to on a `CompileStatus::Cached` hit.
+/// Used for pre-charge / refund around the [`sp_virtualization::Module::from_bytes`] compile:
+/// `Cold` pre-charges the worst case (cache miss, the host actually compiles); `Warm` is the
+/// cheaper cost charged when the per-block [`sp_virtualization::Module::lookup`] already hit.
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 #[derive(Clone, Copy)]
 struct JitCodeLoadToken {
@@ -320,12 +319,10 @@ impl<'a, E: Ext> PreparedCall<'a, E, JitInstance> {
 	/// warm on hit would leave it inflated by `cold - warm` even after
 	/// the refund, defeating dry-run estimates.
 	///
-	/// `blob.code()` is `Some` on the fresh-upload path (`from_pvm_code`)
-	/// and `None` on the load-from-storage path (the host fetches
-	/// `PristineCode` via `storage_key` itself). Passing the storage key
-	/// as the `from_bytes` identifier means the upload compile populates
-	/// the same cache entry the later `from_storage` `Module::lookup`
-	/// will hit.
+	/// `blob.code()` always carries the program bytes (loaded from `PristineCode` in the
+	/// runtime, on both authoring and validation). Passing the contract's `storage_key` as the
+	/// `from_bytes` identifier caches the compiled module under it, so a later load of the same
+	/// contract hits [`Module::lookup`].
 	pub fn new_jit(
 		blob: &ContractBlob<E::T>,
 		mut runtime: Runtime<'a, E, JitInstance>,
@@ -347,18 +344,10 @@ impl<'a, E: Ext> PreparedCall<'a, E, JitInstance> {
 					.ext()
 					.frame_meter_mut()
 					.charge_weight_token(JitCodeLoadToken::cold(code_info))?;
-				let (m, _) = match blob.code() {
-					Some(b) => Module::from_bytes(b, Some(&key)),
-					None => Module::from_storage_key(&key, &[]),
-				}
-				.map_err(|err| -> DispatchError {
+				Module::from_bytes(blob.code(), Some(&key)).map_err(|err| -> DispatchError {
 					log::debug!(target: LOG_TARGET, "jit compile failed: {err:?}");
-					match err {
-						ModuleError::NotFound => Error::<E::T>::CodeNotFound.into(),
-						_ => Error::<E::T>::CodeRejected.into(),
-					}
-				})?;
-				m
+					Error::<E::T>::CodeRejected.into()
+				})?
 			},
 			Err(err) => {
 				log::debug!(target: LOG_TARGET, "jit Module::lookup failed: {err:?}");

@@ -260,7 +260,7 @@ mod benchmarks {
 	}
 
 	// Same as `call_with_pvm_jit_cold_cache_per_byte` but primes the per-extension
-	// cache with a prior call so the measured call hits `CompileStatus::Cached`.
+	// cache with a prior call so the measured call hits the warm `Module::lookup` path.
 	#[benchmark(pov_mode = Measured)]
 	fn call_with_pvm_jit_warm_cache_per_byte(
 		c: Linear<0, { 100 * 1024 }>,

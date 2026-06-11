@@ -66,19 +66,6 @@ pub use host_functions::{ExecBuffer, ExecStatus, VirtManagerBackend, VirtManager
 #[doc(inline)]
 pub use host_functions::virtualization::HostFunctions;
 
-/// Hooks for installing a runtime-side replacement of `compile_from_storage_key` via
-/// `replace_implementation!`.
-///
-/// Notably used by cumulus's `validate_block`, where the PVF's `ValidationExternalities`
-/// panics on every storage method and the host-side `compile_from_storage_key` impl
-/// (which reads bytes via `Externalities::storage`) cannot run. The replacement routes
-/// the read into the in-WASM trie and reconstructs the same [`CompiledModule`] return
-/// value. Gated on `cfg(substrate_runtime)` because the `runtime_interface` macro only
-/// emits the `host_*` `ExchangeableFunction` symbol on the WASM side.
-#[cfg(substrate_runtime)]
-#[doc(inline)]
-pub use host_functions::{virtualization::host_compile_from_storage_key, CompiledModule};
-
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 /// The target we use for all logging.
@@ -162,20 +149,6 @@ impl AsRef<[u8]> for SyscallSymbol {
 	fn as_ref(&self) -> &[u8] {
 		&self.bytes[..self.len as usize]
 	}
-}
-
-/// Status returned by the `compile_*` host functions.
-///
-/// Lets the caller distinguish a cheap cache hit from a fresh compile so it can
-/// charge weight accordingly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
-#[repr(u8)]
-pub enum CompileStatus {
-	/// Module was already in the per-extension cache; no compilation occurred.
-	Cached = 0,
-	/// Module was freshly compiled (and, for [`Module::from_storage_key`], the
-	/// program bytes were read from storage).
-	Compiled = 1,
 }
 
 /// Errors that can be emitted when compiling a program into a module.
