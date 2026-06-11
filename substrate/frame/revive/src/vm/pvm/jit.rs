@@ -20,9 +20,9 @@
 //! Declared as a submodule of [`super`] (the polkavm host integration) under
 //! `cfg(any(revive_jit, feature = "runtime-benchmarks"))`, so every item
 //! defined here is automatically gated and has private-field access to
-//! `PreparedCall`. The one hand-off point outside this module that decides the
-//! JIT backend (the `is_jit()` dispatch in `ContractBlob::execute`) still needs
-//! its own cfg attribute.
+//! `PreparedCall`. The few hand-off points outside this module that decide
+//! the JIT backend (the `from_storage` JIT short-circuit and the `is_jit()`
+//! dispatch in `ContractBlob::execute`) still need their own cfg attribute.
 
 use super::{Interrupt, Memory, MeterBackend, PolkaVmInstance, PreparedCall, Runtime};
 use crate::{
@@ -109,11 +109,12 @@ impl<T: Config> PolkaVmWeightBackend<T> for JitBackend {
 	}
 }
 
-/// Compile-time cost of JIT-compiling a contract.
+/// Compile-time cost of loading + JIT-compiling a contract.
 ///
-/// Used for pre-charge / refund around the [`sp_virtualization::Module::from_bytes`] compile:
-/// `Cold` pre-charges the worst case (cache miss, the host actually compiles); `Warm` is the
-/// cheaper cost charged when the per-block [`sp_virtualization::Module::lookup`] already hit.
+/// `Cold` is charged on a [`sp_virtualization::Module::lookup`] miss and prices the in-runtime
+/// `PristineCode` read (per-byte ref_time and proof) plus the
+/// [`sp_virtualization::Module::from_bytes`] compile; `Warm` is charged on a hit and prices
+/// only the lookup + instantiation of the already-compiled module — no storage read happens.
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 #[derive(Clone, Copy)]
 struct JitCodeLoadToken {
@@ -319,10 +320,15 @@ impl<'a, E: Ext> PreparedCall<'a, E, JitInstance> {
 	/// warm on hit would leave it inflated by `cold - warm` even after
 	/// the refund, defeating dry-run estimates.
 	///
-	/// `blob.code()` always carries the program bytes (loaded from `PristineCode` in the
-	/// runtime, on both authoring and validation). Passing the contract's `storage_key` as the
-	/// `from_bytes` identifier caches the compiled module under it, so a later load of the same
-	/// contract hits [`Module::lookup`].
+	/// `blob.code()` is `Some` on the fresh-upload path (`from_pvm_code`) and `None` on the
+	/// load-from-storage path, where `PristineCode` is read **in the runtime, on cache miss
+	/// only**. Skipping the read on a hit is consensus-safe because the compile cache is
+	/// deterministic per block (one fresh cache spans exactly one block execution on
+	/// authoring, import and PVF validation alike): a hit implies an earlier call in this
+	/// same block already missed, read the code — putting it into the PoV witness — and
+	/// compiled it, so the read-set stays identical on all three. Passing the contract's
+	/// `storage_key` as the `from_bytes` identifier caches the compiled module under it, so
+	/// a later load of the same contract hits [`Module::lookup`].
 	pub fn new_jit(
 		blob: &ContractBlob<E::T>,
 		mut runtime: Runtime<'a, E, JitInstance>,
@@ -344,7 +350,16 @@ impl<'a, E: Ext> PreparedCall<'a, E, JitInstance> {
 					.ext()
 					.frame_meter_mut()
 					.charge_weight_token(JitCodeLoadToken::cold(code_info))?;
-				Module::from_bytes(blob.code(), Some(&key)).map_err(|err| -> DispatchError {
+				let loaded;
+				let code = match blob.code() {
+					Some(bytes) => bytes,
+					None => {
+						loaded = pristine_code::get::<E::T>(blob.code_hash())
+							.ok_or(Error::<E::T>::CodeNotFound)?;
+						&loaded
+					},
+				};
+				Module::from_bytes(code, Some(&key)).map_err(|err| -> DispatchError {
 					log::debug!(target: LOG_TARGET, "jit compile failed: {err:?}");
 					Error::<E::T>::CodeRejected.into()
 				})?

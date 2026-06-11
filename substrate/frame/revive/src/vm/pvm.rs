@@ -79,7 +79,7 @@ impl<T: Config> ContractBlob<T> {
 			behaviour_version: Default::default(),
 		};
 		let code_hash = H256(sp_io::hashing::keccak_256(&code));
-		Ok(ContractBlob { code, code_info, code_hash })
+		Ok(ContractBlob { code: Some(code), code_info, code_hash })
 	}
 }
 
