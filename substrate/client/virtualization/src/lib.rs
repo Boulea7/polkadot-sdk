@@ -77,13 +77,20 @@ impl<Block: BlockT> sc_client_api::execution_extensions::ExtensionsFactory<Block
 	}
 }
 
-/// Total warm sandbox workers to keep ready: the maximum contract call-stack depth.
+/// Maximum number of virtualization instances alive at once.
 ///
-/// At full nesting that many sandboxes are live at once, so keeping that many warm means a
-/// validation never has to spawn one mid-flight. `set_worker_count` is *per core*, so
-/// [`build_engine`] divides this across cores (rounding up) and [`warm_up_sandbox_pool`]
-/// pre-spawns the lot.
-const SANDBOX_WORKER_TARGET: usize = 30;
+/// Each live instance pins a sandbox worker process and its memory, so the number alive at once
+/// must be bounded. One instance is live per nested contract frame, so the bound is the maximum
+/// contract call-stack depth and must stay `>=` the consumer's maximum call depth (for
+/// pallet-revive, `CALL_STACK_DEPTH + 1`, currently 26).
+///
+/// It serves two roles:
+/// - [`warm_up_sandbox_pool`] pre-spawns this many sandbox workers so a fully-nested call always
+///   finds one warm and never has to spawn mid-validation. `set_worker_count` is *per core*, so
+///   [`build_engine`] divides this across cores (rounding up).
+/// - [`VirtManager::instantiate`] enforces it as a hard cap, returning
+///   `InstantiateError::TooManyInstances` once that many instances are live.
+const MAX_LIVE_INSTANCES: usize = 30;
 
 /// The single, process-global PolkaVM engine used for everything.
 ///
@@ -99,9 +106,9 @@ static ENGINE: OnceLock<Engine> = OnceLock::new();
 fn build_engine() -> Engine {
 	let mut config = Config::from_env().expect("Invalid config.");
 	// `set_worker_count` caps the sandbox cache per core, so divide the total target across
-	// cores (rounding up) — summed over all cores the caches then hold >= SANDBOX_WORKER_TARGET.
+	// cores (rounding up) — summed over all cores the caches then hold >= MAX_LIVE_INSTANCES.
 	let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-	config.set_worker_count(SANDBOX_WORKER_TARGET.div_ceil(cores));
+	config.set_worker_count(MAX_LIVE_INSTANCES.div_ceil(cores));
 	config.set_default_cost_model(Some(CostModelKind::Full(CacheModel::L2Hit)));
 	Engine::new(&config).expect("Failed to initialize PolkaVM.")
 }
@@ -140,11 +147,11 @@ fn engine() -> &'static Engine {
 	)
 }
 
-/// Pre-spawn [`SANDBOX_WORKER_TARGET`] sandbox workers so a max-depth nest finds them warm.
+/// Pre-spawn [`MAX_LIVE_INSTANCES`] sandbox workers so a max-depth nest finds them warm.
 ///
 /// `instantiate` acquires a sandbox (spawning a fresh worker process when none is cached)
 /// and holds it for the instance's lifetime; dropping the instance recycles the sandbox into
-/// the engine's per-core cache. We hold [`SANDBOX_WORKER_TARGET`] instances at once so each
+/// the engine's per-core cache. We hold [`MAX_LIVE_INSTANCES`] instances at once so each
 /// forces a *distinct* sandbox to spawn (a sequential loop would just reuse one); they then
 /// recycle across the per-core caches the same way a deeply-nested call's frames distribute,
 /// so a nest up to that depth finds a warm sandbox wherever PolkaVM places each frame. The
@@ -165,10 +172,10 @@ fn warm_up_sandbox_pool(engine: &Engine) {
 
 	// Held all at once (not a sequential loop) so each forces a *distinct* sandbox to spawn;
 	// they recycle into the per-core caches when this `Vec` drops at the end of the function.
-	let _warm: Vec<_> = (0..SANDBOX_WORKER_TARGET)
+	let _warm: Vec<_> = (0..MAX_LIVE_INSTANCES)
 		.map(|_| module.instantiate().expect("failed to spawn a PolkaVM sandbox worker"))
 		.collect();
-	log::debug!(target: LOG_TARGET, "Sandbox warm-up: pre-spawned {SANDBOX_WORKER_TARGET} sandbox workers");
+	log::debug!(target: LOG_TARGET, "Sandbox warm-up: pre-spawned {MAX_LIVE_INSTANCES} sandbox workers");
 }
 
 fn map_memory_error(error: MemoryAccessError) -> MemoryError {
@@ -410,6 +417,11 @@ impl VirtManagerBackend for VirtManager {
 	}
 
 	fn instantiate(&mut self, module_id: ModuleId) -> Result<InstanceId, InstantiateError> {
+		if self.instances.len() >= MAX_LIVE_INSTANCES {
+			log::error!(target: LOG_TARGET, "live-instance limit ({MAX_LIVE_INSTANCES}) reached");
+			return Err(InstantiateError::TooManyInstances);
+		}
+
 		let compiled = self.modules.get(&module_id).ok_or(InstantiateError::InvalidModule)?.clone();
 
 		let instance = compiled.module.instantiate().map_err(|err| {
@@ -522,5 +534,25 @@ mod tests {
 	fn warm_up_runs() {
 		ensure_engine();
 		warm_up_sandbox_pool(engine());
+	}
+
+	/// `instantiate` refuses once [`MAX_LIVE_INSTANCES`] instances are live, and accepts again
+	/// once one of them is destroyed.
+	#[test]
+	fn instantiate_enforces_live_instance_cap() {
+		ensure_engine();
+		let program = sp_virtualization_test_fixture::binary();
+
+		let mut m = VirtManager::default();
+		let module_id = m.compile(program, None).unwrap();
+
+		let ids: Vec<_> = (0..MAX_LIVE_INSTANCES)
+			.map(|_| m.instantiate(module_id).expect("instantiation below the cap succeeds"))
+			.collect();
+
+		assert!(matches!(m.instantiate(module_id), Err(InstantiateError::TooManyInstances)));
+
+		m.destroy(ids[0]).unwrap();
+		assert!(m.instantiate(module_id).is_ok());
 	}
 }

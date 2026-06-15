@@ -171,6 +171,12 @@ pub enum InstantiateError {
 	InvalidImage = -1,
 	/// The supplied `module_id` was invalid or the module was not found.
 	InvalidModule = -2,
+	/// The maximum number of simultaneously live instances has been reached.
+	///
+	/// Each live instance pins backend resources (for the sandbox backend, a worker process and
+	/// its memory), so their number is bounded; another instance can be created once one of the
+	/// live ones is destroyed.
+	TooManyInstances = -3,
 }
 
 /// Errors that can be emitted when executing a new virtualization instance.
