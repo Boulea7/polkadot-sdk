@@ -482,7 +482,7 @@ impl VmBinaryModule {
 		};
 
 		let ret = Instruction::jump_indirect(Reg::RA.into(), 0);
-		let seal_return_idx: u32 = 0;
+		let seal_return_idx: i32 = 0;
 
 		let mut builder = ProgramBlobBuilder::new(InstructionSetKind::ReviveV1);
 		builder.add_import(b"seal_return");
