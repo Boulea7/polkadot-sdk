@@ -204,7 +204,7 @@ impl Tracing for ExecutionTracer {
 			return_data,
 			error: None,
 			kind: ExecutionStepKind::PVMSyscall {
-				op: lookup_trace_op_index(ecall).unwrap_or_default(),
+				op: lookup_trace_op_index(ecall).unwrap_or_default() as u8,
 				args: syscall_args,
 				returned: None,
 			},
